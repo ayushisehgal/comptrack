@@ -18,14 +18,29 @@ export default function HomePage() {
   useEffect(() => { fetchData() }, [filters, page])
 
   async function fetchData() {
-    setLoading(true)
-    const params = new URLSearchParams({ ...filters, page: String(page), limit: '20' })
+  setLoading(true)
+  try {
+    const params = new URLSearchParams({
+      ...filters,
+      page: String(page),
+      limit: '20',
+    })
+
     const res = await fetch(`/api/salaries?${params}`)
     const data = await res.json()
-    setEntries(data.entries)
-    setTotal(data.total)
+
+    // ✅ SAFE FALLBACKS (CRITICAL FIX)
+    setEntries(Array.isArray(data?.entries) ? data.entries : [])
+    setTotal(typeof data?.total === 'number' ? data.total : 0)
+
+  } catch (err) {
+    console.error('Fetch error:', err)
+    setEntries([])   // ✅ prevent crash
+    setTotal(0)
+  } finally {
     setLoading(false)
   }
+}
 
   return (
     <div className="min-h-screen bg-gray-50">
