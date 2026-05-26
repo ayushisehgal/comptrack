@@ -1,27 +1,94 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth/next'
+import { z } from 'zod'
+import { PrismaClient } from '@prisma/client'
+import { PrismaNeon } from '@prisma/adapter-neon'
+import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
-import { SalarySchema, normalizeCompanyName } from '@/lib/utils'
 
-/**
- * ✅ POST → Create salary entry (AUTH REQUIRED)
- */
-export async function POST(req: NextRequest) {
+function getPrisma() {
+  const adapter = new PrismaNeon({
+    connectionString: process.env.DATABASE_URL!
+  })
+  return new PrismaClient({ adapter } as any)
+}
+
+const SalarySchema = z.object({
+  companyName: z.string().min(1).max(100),
+  role: z.string().min(1).max(100),
+  level: z.string().min(1).max(20),
+  location: z.string().min(1).max(100),
+  currency: z.enum(['INR', 'USD']).default('INR'),
+  baseSalary: z.number().positive(),
+  bonus: z.number().min(0).default(0),
+  stockValue: z.number().min(0).default(0),
+  yearsExp: z.number().int().min(0).max(40).optional(),
+})
+
+function normalizeCompanyName(name: string): string {
+  return name.trim().toLowerCase()
+    .replace(/\s+(inc|llc|ltd|limited|corporation|corp|technologies|tech)\.?$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export async function GET(req: NextRequest) {
+  const prisma = getPrisma()
   try {
-    const session = await getServerSession(authOptions)
+    const { searchParams } = new URL(req.url)
+    const page = parseInt(searchParams.get('page') || '1')
+    const limit = parseInt(searchParams.get('limit') || '20')
+    const company = searchParams.get('company') || ''
+    const role = searchParams.get('role') || ''
+    const level = searchParams.get('level') || ''
+    const location = searchParams.get('location') || ''
+    const sortBy = searchParams.get('sortBy') || 'totalComp'
+    const sortOrder = (searchParams.get('sortOrder') || 'desc') as 'asc' | 'desc'
 
-    // 🔒 protect POST
-    if (!session) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      )
+    const where: any = {}
+    if (company) where.company = { name: { contains: company, mode: 'insensitive' } }
+    if (role) where.role = { contains: role, mode: 'insensitive' }
+    if (level) where.level = { equals: level, mode: 'insensitive' }
+    if (location) where.location = { contains: location, mode: 'insensitive' }
+
+    const [entries, total] = await Promise.all([
+      prisma.salaryEntry.findMany({
+        where,
+        include: { company: { select: { name: true, industry: true } } },
+        orderBy: { [sortBy]: sortOrder },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.salaryEntry.count({ where }),
+    ])
+
+    return NextResponse.json({
+      entries, total, page,
+      totalPages: Math.ceil(total / limit)
+    })
+  } catch (err) {
+    console.error('[salaries GET error]', err)
+    return NextResponse.json(
+      { error: 'Failed to fetch salaries' },
+      { status: 500 }
+    )
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const prisma = getPrisma()
+  try {
+    let userId = null
+    try {
+      const session = await getServerSession(authOptions)
+      userId = (session?.user as any)?.id || null
+    } catch {
+      userId = null
     }
 
     const body = await req.json()
 
-    // ✅ validate input
     const parsed = SalarySchema.safeParse(body)
     if (!parsed.success) {
       return NextResponse.json(
@@ -33,14 +100,13 @@ export async function POST(req: NextRequest) {
     const data = parsed.data
     const normalizedName = normalizeCompanyName(data.companyName)
 
-    // ✅ find or create company
     let company = await prisma.company.findFirst({
       where: {
         OR: [
           { name: { equals: data.companyName, mode: 'insensitive' } },
           { aliases: { has: normalizedName } },
-        ],
-      },
+        ]
+      }
     })
 
     if (!company) {
@@ -48,15 +114,12 @@ export async function POST(req: NextRequest) {
         data: {
           name: data.companyName.trim(),
           aliases: [normalizedName],
-        },
+        }
       })
     }
 
-    // ✅ compute total compensation
-    const totalComp =
-      data.baseSalary + data.bonus + data.stockValue
+    const totalComp = data.baseSalary + data.bonus + data.stockValue
 
-    // ✅ create salary entry
     const entry = await prisma.salaryEntry.create({
       data: {
         companyId: company.id,
@@ -69,67 +132,19 @@ export async function POST(req: NextRequest) {
         stockValue: data.stockValue,
         totalComp,
         yearsExp: data.yearsExp ?? null,
-        userId: (session.user as any)?.id ?? null,
+        userId: userId,
       },
-      include: {
-        company: { select: { name: true } },
-      },
+      include: { company: { select: { name: true } } },
     })
 
     return NextResponse.json(entry, { status: 201 })
-
   } catch (err) {
-    console.error('[POST salaries error]', err)
-
+    console.error('[salaries POST error]', err)
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Internal server error', detail: String(err) },
       { status: 500 }
     )
-  }
-}
-
-
-/**
- * ✅ GET → Fetch salaries (PUBLIC)
- */
-export async function GET(req: NextRequest) {
-  try {
-    const { searchParams } = new URL(req.url)
-
-    const page = parseInt(searchParams.get('page') || '1')
-    const limit = parseInt(searchParams.get('limit') || '20')
-
-    const skip = (page - 1) * limit
-
-    // ✅ fetch paginated entries
-    const entries = await prisma.salaryEntry.findMany({
-      skip,
-      take: limit,
-      orderBy: {
-        createdAt: 'desc',
-      },
-      include: {
-        company: {
-          select: { name: true },
-        },
-      },
-    })
-
-    // ✅ total count for pagination
-    const total = await prisma.salaryEntry.count()
-
-    // ✅ IMPORTANT: match frontend format
-    return NextResponse.json({
-      entries,
-      total,
-    })
-
-  } catch (error) {
-    console.error('[GET salaries error]', error)
-
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+  } finally {
+    await prisma.$disconnect()
   }
 }
