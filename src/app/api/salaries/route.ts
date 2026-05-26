@@ -124,12 +124,11 @@ export async function POST(req: NextRequest) {
         bonus: data.bonus,
         stockValue: data.stockValue,
         totalComp,
-        yearsExp: data.yearsExp,
-        userId: (session?.user as any)?.id || null,
-      },
-      include: { company: { select: { name: true } } },
-    })
-
+        yearsExp: data.yearsExp ?? null,
+        userId: null, // anonymous for now
+     },
+     include: { company: { select: { name: true } } },
+  })
     return NextResponse.json(entry, { status: 201 })
   } catch (err) {
     console.error('[salaries POST error]', err)
