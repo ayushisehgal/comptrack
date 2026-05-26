@@ -97,3 +97,12 @@ model VerificationToken {
 
   @@unique([identifier, token])
 }
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
