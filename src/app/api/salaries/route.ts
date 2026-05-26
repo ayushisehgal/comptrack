@@ -1,9 +1,16 @@
- 
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { PrismaClient } from '@prisma/client/edge'
+import { PrismaClient } from '@prisma/client'
+import { PrismaNeon } from '@prisma/adapter-neon'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+
+function getPrisma() {
+  const adapter = new PrismaNeon({
+    connectionString: process.env.DATABASE_URL!
+  })
+  return new PrismaClient({ adapter } as any)
+}
 
 const SalarySchema = z.object({
   companyName: z.string().min(1).max(100),
@@ -25,6 +32,7 @@ function normalizeCompanyName(name: string): string {
 }
 
 export async function GET(req: NextRequest) {
+  const prisma = getPrisma()
   try {
     const { searchParams } = new URL(req.url)
     const page = parseInt(searchParams.get('page') || '1')
@@ -53,14 +61,23 @@ export async function GET(req: NextRequest) {
       prisma.salaryEntry.count({ where }),
     ])
 
-    return NextResponse.json({ entries, total, page, totalPages: Math.ceil(total / limit) })
+    return NextResponse.json({
+      entries, total, page,
+      totalPages: Math.ceil(total / limit)
+    })
   } catch (err) {
-    console.error(err)
-    return NextResponse.json({ error: 'Failed to fetch salaries' }, { status: 500 })
+    console.error('[salaries GET error]', err)
+    return NextResponse.json(
+      { error: 'Failed to fetch salaries' },
+      { status: 500 }
+    )
+  } finally {
+    await prisma.$disconnect()
   }
 }
 
 export async function POST(req: NextRequest) {
+  const prisma = getPrisma()
   try {
     const session = await getServerSession(authOptions)
     const body = await req.json()
@@ -115,7 +132,12 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(entry, { status: 201 })
   } catch (err) {
-    console.error(err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    console.error('[salaries POST error]', err)
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    )
+  } finally {
+    await prisma.$disconnect()
   }
 }

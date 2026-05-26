@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { PrismaClient } from '@prisma/client/edge'
+import { PrismaClient } from '@prisma/client'
 import { PrismaNeon } from '@prisma/adapter-neon'
 
 function getPrisma() {
-  const adapter = new PrismaNeon({ 
-    connectionString: process.env.DATABASE_URL! 
+  const adapter = new PrismaNeon({
+    connectionString: process.env.DATABASE_URL!
   })
   return new PrismaClient({ adapter } as any)
 }
