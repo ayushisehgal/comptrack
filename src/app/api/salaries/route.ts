@@ -1,8 +1,10 @@
-import { getServerSession } from "next-auth/next"
+import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth/next'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'   // ✅ use global prisma
+import { SalarySchema, normalizeCompanyName } from '@/lib/utils' // adjust path
 
 export async function POST(req: NextRequest) {
-  const prisma = getPrisma()
-
   try {
     const session = await getServerSession(authOptions)
 
@@ -67,6 +69,39 @@ export async function POST(req: NextRequest) {
 
   } catch (err) {
     console.error('[salaries POST error]', err)
+
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url)
+
+    const page = parseInt(searchParams.get('page') || '1')
+    const limit = parseInt(searchParams.get('limit') || '80')
+
+    const skip = (page - 1) * limit
+
+    const salaries = await prisma.salaryEntry.findMany({
+      skip,
+      take: limit,
+      orderBy: {
+        createdAt: 'desc',
+      },
+      include: {
+        company: {
+          select: { name: true },
+        },
+      },
+    })
+
+    return NextResponse.json(salaries)
+
+  } catch (error) {
+    console.error('[GET salaries error]', error)
 
     return NextResponse.json(
       { error: 'Internal server error' },
